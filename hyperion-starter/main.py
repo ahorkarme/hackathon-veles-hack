@@ -26,12 +26,14 @@ MODEL = "llama3.1"
 
 MAX_ROUNDS = 4
 MAX_HISTORY = 10
+TOOL_NAMES = {t.name for t in TOOLS}
 
 llm = ChatOpenAI(
     model=MODEL,
     base_url=BASE_URL,
     api_key=API_KEY,
     max_completion_tokens=2048,
+    temperature=0,
 )
 llm_tools = llm.bind_tools(TOOLS)
 
@@ -55,18 +57,34 @@ sessions = {}
 
 SYSTEM_PROMPT = """You are Hyperion, the assistant inside the HyperAI IDE.
 
-You answer questions about HYPER-AI using the documentation below, and you can act
-in the IDE with the tools you have (create/delete folders, create/edit/delete files,
-read and validate files).
+ABOUT HYPER-AI: HYPER-AI is a research project that aims to revolutionise distributed
+computing by integrating IoT, Edge and Cloud (the computing continuum). It creates
+smart virtual computing nodes and optimises data-processing applications across a
+distributed network. The HyperAI IDE is the workspace where users build, validate
+and deploy YAML app profiles.
+
+You answer questions about HYPER-AI using the documentation below and the text above,
+and you can act in the IDE with your tools (create/delete folders, create/edit/delete
+files, read and validate files).
+
+HyperAI, Hyper-AI and HYPER-AI are the same project. Never say you have no information
+about HyperAI: the text above and the documentation below are your information.
 
 Rules:
+- To act, you MUST call a tool. Never write JSON or tool calls in your answer.
+- Never say you did something unless you actually called the tool for it.
 - Paths are relative to the workspace root. Never absolute, never with '..'.
 - To change an existing file, first read it with read_tool_file, then call edit_file
   with the COMPLETE new content (edit_file replaces the whole file).
-- When the user asks for a file, create it with create_file and put the full content in it.
+- To validate a file, call validate_tool_file and explain the errors and warnings.
+- When the user asks for a file, create it with create_file with the full content.
+  Follow the YAML examples in the documentation. If there is no example, use
+  'apiVersion: hyper.ai/v1' and tell the user to validate the file.
 - After using a tool, tell the user briefly what you did.
-- If the documentation does not contain the answer, say so. Do not invent information.
+- If the question is about HYPER-AI and the documentation does not contain the answer,
+  say so. Do not invent information.
 - Reply in the same language the user writes in.
+- Never say a file is valid unless validate_tool_file returned "valid": true in this turn.
 
 DOCUMENTATION:
 
@@ -88,6 +106,30 @@ def a_mensajes(history):
     return mensajes
 
 
+def extraer_llamadas(texto):
+    """Find tool calls that the model wrote as plain JSON text."""
+    llamadas = []
+    decoder = json.JSONDecoder()
+    i = 0
+    while True:
+        i = texto.find("{", i)
+        if i == -1:
+            break
+        try:
+            obj, fin = decoder.raw_decode(texto[i:])
+        except ValueError:
+            i += 1
+            continue
+        if isinstance(obj, dict) and obj.get("name") in TOOL_NAMES:
+            args = obj.get("parameters") or obj.get("arguments") or {}
+            if isinstance(args, dict):
+                llamadas.append(
+                    {"name": obj["name"], "args": args, "id": f"text-{len(llamadas)}"}
+                )
+        i += fin
+    return llamadas
+
+
 async def generate_reply(request: ChatRequest):
     history = sessions.setdefault(request.user_id, [])
 
@@ -102,40 +144,73 @@ async def generate_reply(request: ChatRequest):
     messages += a_mensajes(history[-MAX_HISTORY:])
 
     full_response = ""
-    acciones = []
 
     try:
         for _ in range(MAX_ROUNDS):
             final = None
-            async for chunk in llm_tools.astream(messages):
-                if chunk.text:
-                    full_response += chunk.text
-                    yield sse({"response": chunk.text})
-                final = chunk if final is None else final + chunk
+            ronda = ""
+            retenido = ""
+            reteniendo = False
 
-            if final is None or not final.tool_calls:
+            async for chunk in llm_tools.astream(messages):
+                final = chunk if final is None else final + chunk
+                t = chunk.text
+                if not t:
+                    continue
+                ronda += t
+                if reteniendo:
+                    retenido += t
+                elif "{" in t:
+                    antes, _, despues = t.partition("{")
+                    if antes:
+                        full_response += antes
+                        yield sse({"response": antes})
+                    reteniendo = True
+                    retenido = "{" + despues
+                else:
+                    full_response += t
+                    yield sse({"response": t})
+
+            nativas = bool(final is not None and final.tool_calls)
+            if nativas:
+                llamadas = list(final.tool_calls)
+            elif retenido:
+                llamadas = extraer_llamadas(ronda)
+            else:
+                llamadas = []
+
+            if not llamadas:
+                if retenido:
+                    full_response += retenido
+                    yield sse({"response": retenido})
                 break
 
-            messages.append(final)
-            for call in final.tool_calls:
+            if nativas:
+                messages.append(final)
+            else:
+                messages.append(AIMessage(content=ronda))
+
+            for call in llamadas:
                 evento, resultado = await execute_tool(call["name"], call["args"])
                 if evento:
                     yield sse(evento)
-                    acciones.append(f"{evento['action']} {evento['path']}")
-                messages.append(
-                    ToolMessage(
-                        content=resultado,
-                        tool_call_id=call.get("id") or call["name"],
+                if nativas:
+                    messages.append(
+                        ToolMessage(
+                            content=resultado,
+                            tool_call_id=call.get("id") or call["name"],
+                        )
                     )
-                )
+                else:
+                    messages.append(
+                        HumanMessage(
+                            content=f"Result of {call['name']}: {resultado}"
+                        )
+                    )
     except Exception as exc:
         yield sse({"response": f"\n\n[Error: {exc}]"})
 
-    # Guardar respuesta (y las acciones hechas) en memoria
-    guardado = full_response
-    if acciones:
-        guardado += "\n[Actions done: " + ", ".join(acciones) + "]"
-    history.append({"role": "assistant", "content": guardado})
+    history.append({"role": "assistant", "content": full_response})
 
     yield "data: [DONE]\n\n"
 
