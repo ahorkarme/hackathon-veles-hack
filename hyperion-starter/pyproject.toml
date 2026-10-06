@@ -9,7 +9,7 @@ dependencies = [
     "httpx>=0.28.1",
     "langchain-openai>=1.6.1",
     "numpy>=2.5.3",
+    "openai>=1.0",
     "python-dotenv>=1.2.3",
-    "sentence-transformers>=6.1.0",
     "uvicorn>=0.34",
 ]
