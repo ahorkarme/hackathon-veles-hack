@@ -66,12 +66,13 @@ smart virtual computing nodes and optimises data-processing applications across 
 distributed network. The HyperAI IDE is the workspace where users build, validate
 and deploy YAML app profiles.
 
-You answer questions about HYPER-AI using the documentation below and the text above,
-and you can act in the IDE with your tools (create/delete folders, create/edit/delete
-files, read and validate files).
+You answer questions about HYPER-AI using the documentation provided in each user
+message and the text above, and you can act in the IDE with your tools (create/delete
+folders, create/edit/delete files, read and validate files).
 
 HyperAI, Hyper-AI and HYPER-AI are the same project. Never say you have no information
-about HyperAI: the text above and the documentation below are your information.
+about HyperAI: the text above and the documentation in the user message are your
+information.
 
 Rules:
 - To act, you MUST call a tool. Never write JSON or tool calls in your answer.
@@ -89,18 +90,17 @@ Rules:
 - Reply in the same language the user writes in.
 - Never say a file is valid unless validate_tool_file returned "valid": true in this turn.
 
-DOCUMENTATION:
-
-{contexto}
 """
 
 
 def sse(payload):
     return f"data: {json.dumps(payload)}\n\n"
 
+
 def normalizar(texto):
     # Los documentos escriben siempre "HYPER-AI"
     return re.sub(r"hyper[\s-]?ai", "HYPER-AI", texto, flags=re.IGNORECASE)
+
 
 def a_mensajes(history):
     mensajes = []
