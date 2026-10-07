@@ -89,7 +89,6 @@ Rules:
   say so. Do not invent information.
 - Reply in the same language the user writes in.
 - Never say a file is valid unless validate_tool_file returned "valid": true in this turn.
-
 """
 
 
@@ -209,6 +208,9 @@ async def generate_reply(request: ChatRequest):
                 else:
                     full_response += t
                     yield sse({"response": t})
+
+            # DEBUG: ver qué devuelve el modelo en cada ronda (borrar al terminar)
+            print(f"ROUND text={ronda!r} tool_calls={getattr(final, 'tool_calls', None)}", flush=True)
 
             nativas = bool(final is not None and final.tool_calls)
             if nativas:
