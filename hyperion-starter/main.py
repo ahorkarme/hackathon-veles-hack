@@ -31,6 +31,15 @@ MAX_ROUNDS = 4
 MAX_HISTORY = 10
 TOOL_NAMES = {t.name for t in TOOLS}
 
+# Solo se activan las herramientas si el mensaje parece una acción sobre el IDE
+ACTION_RE = re.compile(
+    r"\b(create|creates|crea|crear|make|generate|genera|generar|write|escribe|add|"
+    r"a\u00f1ade|edit|edita|editar|modify|modifica|change|cambia|update|actualiza|"
+    r"delete|borra|borrar|elimina|eliminar|remove|read|lee|leer|"
+    r"validate|valida|validar|folder|carpeta|file|archivo)\b",
+    re.IGNORECASE,
+)
+
 llm = ChatOpenAI(
     model=MODEL,
     base_url=BASE_URL,
@@ -191,6 +200,9 @@ async def generate_reply(request: ChatRequest):
 
     full_response = ""
 
+    # Preguntas y resúmenes van sin herramientas; acciones, con herramientas
+    modelo = llm_tools if ACTION_RE.search(request.text) else llm
+
     try:
         for _ in range(MAX_ROUNDS):
             final = None
@@ -198,7 +210,7 @@ async def generate_reply(request: ChatRequest):
             retenido = ""
             reteniendo = False
 
-            async for chunk in llm_tools.astream(messages):
+            async for chunk in modelo.astream(messages):
                 final = chunk if final is None else final + chunk
                 t = chunk.text
                 if not t:
@@ -241,6 +253,8 @@ async def generate_reply(request: ChatRequest):
 
             for call in llamadas:
                 evento, resultado = await execute_tool(call["name"], call["args"])
+                # DEBUG: ver qué herramienta se llamó y qué pasó (borrar al terminar)
+                print(f"TOOL {call['name']} args={str(call['args'])[:300]!r} evento={evento is not None} resultado={resultado[:200]!r}", flush=True)
                 if evento:
                     yield sse(evento)
                 if nativas:
