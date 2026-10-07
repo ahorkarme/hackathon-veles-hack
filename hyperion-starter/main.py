@@ -88,6 +88,9 @@ Rules:
 - If the question is about HYPER-AI and the documentation does not contain the answer,
   say so. Do not invent information.
 - Reply in the same language the user writes in.
+- Use read_tool_file and validate_tool_file only for files the user names or that
+  exist in the IDE workspace. The documentation excerpts are not files: never try
+  to read them. For questions about HYPER-AI, answer directly without calling tools.
 - Never say a file is valid unless validate_tool_file returned "valid": true in this turn.
 """
 
@@ -165,7 +168,7 @@ async def generate_reply(request: ChatRequest):
         resultados = []
     print([(r["filename"], round(r["score"], 3)) for r in resultados], flush=True)
     contexto = "\n\n".join(
-        f"DOCUMENT: {r['filename']}\n{r['text']}" for r in resultados
+        f"[Excerpt {i}]\n{r['text']}" for i, r in enumerate(resultados, 1)
     )
 
     # El contexto del RAG va ahora en el mensaje del usuario, no en el system prompt
@@ -178,7 +181,12 @@ async def generate_reply(request: ChatRequest):
     
     # Añadimos la pregunta actual, junto con la documentación recuperada
     messages.append(
-        HumanMessage(content=f"Documentation:\n{contexto}\n\nQuestion: {pregunta_norm}")
+        HumanMessage(
+            content=(
+                "Documentation excerpts (reference text, NOT files in the IDE workspace):\n"
+                f"{contexto}\n\nQuestion: {pregunta_norm}"
+            )
+        )
     )
 
     full_response = ""
