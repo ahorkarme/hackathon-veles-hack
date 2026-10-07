@@ -1,5 +1,6 @@
 import json
 import os
+import re
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -21,6 +22,8 @@ from tools import TOOLS, execute_tool
 load_dotenv()
 
 API_KEY = os.environ.get("API_KEY", "")
+if not API_KEY:
+    print("WARNING: API_KEY is not set; LLM calls will fail with 401.", flush=True)
 BASE_URL = "https://legion1.di.uoa.gr/v1"
 MODEL = "llama3.1"
 
@@ -95,6 +98,9 @@ DOCUMENTATION:
 def sse(payload):
     return f"data: {json.dumps(payload)}\n\n"
 
+def normalizar(texto):
+    # Los documentos escriben siempre "HYPER-AI"
+    return re.sub(r"hyper[\s-]?ai", "HYPER-AI", texto, flags=re.IGNORECASE)
 
 def a_mensajes(history):
     mensajes = []
@@ -149,21 +155,32 @@ async def generate_reply(request: ChatRequest):
 
     history = sessions.setdefault(request.user_id, [])
 
-    resultados = buscar_documentacion(request.text, k=3)
+    # Los documentos escriben siempre "HYPER-AI"; unificamos la grafía de la pregunta
+    pregunta_norm = normalizar(request.text)
+
+    try:
+        resultados = buscar_documentacion(pregunta_norm, k=3)
+    except Exception as exc:
+        # Si falla el RAG, seguimos sin contexto en vez de cortar el stream
+        print(f"RAG error: {exc}", flush=True)
+        resultados = []
+    print([(r["filename"], round(r["score"], 3)) for r in resultados], flush=True)
     contexto = "\n\n".join(
         f"DOCUMENT: {r['filename']}\n{r['text']}" for r in resultados
     )
 
-    # Actualizamos el system prompt con el nuevo contexto del RAG
-    system_msg = SystemMessage(content=SYSTEM_PROMPT.format(contexto=contexto))
+    # El contexto del RAG va ahora en el mensaje del usuario, no en el system prompt
+    system_msg = SystemMessage(content=SYSTEM_PROMPT)
     
     # Construimos la lista de mensajes: System + Historial (sin el actual) + User actual
     messages = [system_msg]
     if history:
          messages += a_mensajes(history[-MAX_HISTORY:])
     
-    # Añadimos la pregunta actual a la lista de mensajes que enviamos al LLM
-    messages.append(HumanMessage(content=request.text))
+    # Añadimos la pregunta actual, junto con la documentación recuperada
+    messages.append(
+        HumanMessage(content=f"Documentation:\n{contexto}\n\nQuestion: {pregunta_norm}")
+    )
 
     full_response = ""
 
