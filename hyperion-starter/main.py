@@ -131,6 +131,22 @@ def extraer_llamadas(texto):
 
 
 async def generate_reply(request: ChatRequest):
+    # --- GUARDRAIL SIMPLE ---
+    # Convertimos la pregunta a minúsculas para buscar palabras clave
+    pregunta = request.text.lower()
+    
+    # Lista de palabras permitidas (conceptos clave del proyecto y herramientas)
+    palabras_clave = ["hyper-ai", "hyperai", "ide", "connector", "connectors", 
+                      "deploy", "deployment", "yaml", "archivo", "carpeta", 
+                      "explicar", "explicado", "qué", "crea", "borra", "valida"]
+    
+    # Si la pregunta no contiene NINGUNA de las palabras clave, la rechazamos
+    if not any(palabra in pregunta for palabra in palabras_clave):
+        yield sse({"response": "Lo siento, como asistente de HYPER-AI solo puedo responder preguntas relacionadas con el proyecto, el IDE o realizar acciones sobre los archivos."})
+        yield "data: [DONE]\n\n"
+        return
+    # ------------------------
+
     history = sessions.setdefault(request.user_id, [])
 
     resultados = buscar_documentacion(request.text, k=3)
@@ -138,10 +154,16 @@ async def generate_reply(request: ChatRequest):
         f"DOCUMENT: {r['filename']}\n{r['text']}" for r in resultados
     )
 
-    history.append({"role": "user", "content": request.text})
-
-    messages = [SystemMessage(content=SYSTEM_PROMPT.format(contexto=contexto))]
-    messages += a_mensajes(history[-MAX_HISTORY:])
+    # Actualizamos el system prompt con el nuevo contexto del RAG
+    system_msg = SystemMessage(content=SYSTEM_PROMPT.format(contexto=contexto))
+    
+    # Construimos la lista de mensajes: System + Historial (sin el actual) + User actual
+    messages = [system_msg]
+    if history:
+         messages += a_mensajes(history[-MAX_HISTORY:])
+    
+    # Añadimos la pregunta actual a la lista de mensajes que enviamos al LLM
+    messages.append(HumanMessage(content=request.text))
 
     full_response = ""
 
@@ -210,6 +232,7 @@ async def generate_reply(request: ChatRequest):
     except Exception as exc:
         yield sse({"response": f"\n\n[Error: {exc}]"})
 
+    history.append({"role": "user", "content": request.text})
     history.append({"role": "assistant", "content": full_response})
 
     yield "data: [DONE]\n\n"

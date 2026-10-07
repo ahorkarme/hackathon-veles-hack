@@ -2,7 +2,9 @@ import os
 
 import httpx
 import numpy as np
+from dotenv import load_dotenv
 
+load_dotenv()
 DOCS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs")
 BASE_URL = "https://legion1.di.uoa.gr/v1"
 EMBED_MODEL = "nomic-embed-text"
